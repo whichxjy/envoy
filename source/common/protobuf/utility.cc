@@ -407,7 +407,7 @@ public:
     }
   }
 
-  void onMessage(const Protobuf::Message& message) override {
+  void onMessage(const Protobuf::Message& message, bool) override {
     if (message.GetDescriptor()
             ->options()
             .GetExtension(xds::annotations::v3::message_status)
@@ -455,6 +455,30 @@ void MessageUtil::checkForUnexpectedFields(const Protobuf::Message& message,
                                  : nullptr;
   UnexpectedFieldProtoVisitor unexpected_field_visitor(validation_visitor, runtime);
   ProtobufMessage::traverseMessage(unexpected_field_visitor, message, recurse_into_any);
+}
+
+namespace {
+
+class PgvCheckVisitor : public ProtobufMessage::ConstProtoVisitor {
+public:
+  void onMessage(const Protobuf::Message& message, bool was_any_or_top_level) override {
+    std::string err;
+    // PGV verification is itself recursive up to the point at which it hits an Any message. As
+    // such, to avoid N^2 checking of the tree, we only perform an additional check at the point
+    // at which PGV would have stopped because it does not itself check within Any messages.
+    if (was_any_or_top_level && !pgv::Validator<Protobuf::Message>::CheckMessage(message, &err)) {
+      ProtoExceptionUtil::throwProtoValidationException(err, message);
+    }
+  }
+
+  void onField(const Protobuf::Message&, const Protobuf::FieldDescriptor&) override {}
+};
+
+} // namespace
+
+void MessageUtil::recursivePgvCheck(const Protobuf::Message& message) {
+  PgvCheckVisitor visitor;
+  ProtobufMessage::traverseMessage(visitor, message, true);
 }
 
 std::string MessageUtil::getYamlStringFromMessage(const Protobuf::Message& message,
